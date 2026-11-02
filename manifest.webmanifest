@@ -2,7 +2,7 @@
   "id": "./",
   "name": "Mis Finanzas Pro",
   "short_name": "Finanzas Pro",
-  "description": "Control personal de ingresos, gastos, presupuestos y deudas.",
+  "description": "Control de ingresos, gastos, presupuestos y tasas BCV.",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
@@ -13,14 +13,12 @@
     {
       "src": "icons/icon-192.png",
       "sizes": "192x192",
-      "type": "image/png",
-      "purpose": "any"
+      "type": "image/png"
     },
     {
       "src": "icons/icon-512.png",
       "sizes": "512x512",
-      "type": "image/png",
-      "purpose": "any"
+      "type": "image/png"
     },
     {
       "src": "icons/icon-512-maskable.png",

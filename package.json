@@ -1,0 +1,17 @@
+{
+  "name": "mis-finanzas-pro-android",
+  "version": "1.1.0",
+  "private": true,
+  "description": "Mis Finanzas Pro Android con categor\u00edas y tasas BCV USD/EUR",
+  "scripts": {
+    "sync:android": "npx cap sync android",
+    "open:android": "npx cap open android",
+    "build:debug": "cd android && gradlew.bat assembleDebug"
+  },
+  "dependencies": {
+    "@capacitor/core": "^7.4.0"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^7.4.0"
+  }
+}

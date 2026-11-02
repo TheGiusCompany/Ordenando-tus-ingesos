@@ -1,0 +1,6 @@
+{
+  "appId": "com.misfinanzaspro.app",
+  "appName": "Mis Finanzas Pro",
+  "webDir": "www",
+  "bundledWebRuntime": false
+}

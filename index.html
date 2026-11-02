@@ -138,7 +138,8 @@ table.plain tfoot td{position:static}
 // ============ DATOS ============
 const KEY = 'misfinanzas_v1';
 const CATS = ['Comida','Transporte','Servicios','Vivienda','Salud','Educación','Ocio','Deudas','Trabajo','Otros'];
-const DEF = () => ({rate:0, view:'USD', movs:[], fijos:[], budgets:{}, debts:[], rates:[]});
+const DEF = () => ({rate:0, eurRate:0, rateUpdatedAt:'', eurUpdatedAt:'', customCats:[], view:'USD', movs:[], fijos:[], budgets:{}, debts:[], rates:[]});
+function allCats(){ return [...new Set([...CATS,...(Array.isArray(S.customCats)?S.customCats:[]),...S.movs.map(m=>m.cat).filter(Boolean)])]; }
 let S = load();
 function load(){
   try{
@@ -173,16 +174,29 @@ const fmt = (n,dec=2) => (Number.isFinite(n)?n:0).toLocaleString('es-VE',{minimu
 const money = (n,cur) => (cur==='USD'?'$ ':'Bs ') + fmt(n);
 const sgn = m => m.type==='in' ? 1 : -1;
 const rateOf = m => m.rate>0 ? m.rate : S.rate;
-function usdOf(m){ return m.cur==='USD' ? m.amount : (rateOf(m)>0 ? m.amount/rateOf(m) : 0); }
-function bsOf(m){ return m.cur==='VES' ? m.amount : (rateOf(m)>0 ? m.amount*rateOf(m) : null); }
-function toUsd(amount,cur,rate){ return cur==='USD' ? amount : (rate>0 ? amount/rate : 0); }
+const eurRateOf = m => m.eurRate>0 ? m.eurRate : S.eurRate;
+function usdOf(m){
+  if(m.cur==='USD') return m.amount;
+  if(m.cur==='EUR') return rateOf(m)>0 ? m.amount*eurRateOf(m)/rateOf(m) : 0;
+  return rateOf(m)>0 ? m.amount/rateOf(m) : 0;
+}
+function bsOf(m){
+  if(m.cur==='VES') return m.amount;
+  if(m.cur==='EUR') return eurRateOf(m)>0 ? m.amount*eurRateOf(m) : null;
+  return rateOf(m)>0 ? m.amount*rateOf(m) : null;
+}
+function toUsd(amount,cur,rate){
+  if(cur==='USD') return amount;
+  if(cur==='EUR') return rate>0 && S.eurRate>0 ? amount*S.eurRate/rate : 0;
+  return rate>0 ? amount/rate : 0;
+}
 function showUsd(usd){
   if(S.view==='USD') return money(usd,'USD');
   return S.rate>0 ? money(usd*S.rate,'VES') : '—';
 }
 function balances(){
   let bs=0, usd=0;
-  for(const m of S.movs){ if(m.cur==='USD') usd+=sgn(m)*m.amount; else bs+=sgn(m)*m.amount; }
+  for(const m of S.movs){ if(m.cur==='USD') usd+=sgn(m)*m.amount; else { const v=bsOf(m); if(v!=null) bs+=sgn(m)*v; } }
   return {bs, usd, totalUsd: usd + (S.rate>0 ? bs/S.rate : 0)};
 }
 function cutoff(){
@@ -326,14 +340,14 @@ function filtered(){
   ).sort(cmpAsc);
 }
 function rowHTML(m,i){
-  const cats = CATS.includes(m.cat) ? CATS : [...CATS, m.cat];
+  const cats = allCats();
   return `<tr data-id="${m.id}" class="${m.type==='in'?'r-in':'r-out'}">
     <td class="n">${i+1}</td>
     <td><input type="date" data-f="date" value="${esc(m.date)}"></td>
     <td><input type="text" data-f="desc" value="${esc(m.desc)}" placeholder="Descripción" maxlength="80"></td>
-    <td><select data-f="cat">${cats.map(c=>`<option${c===m.cat?' selected':''}>${esc(c)}</option>`).join('')}</select></td>
+    <td><select data-f="cat">${cats.map(c=>`<option value="${esc(c)}"${c===m.cat?' selected':''}>${esc(c)}</option>`).join('')}<option value="__newcat">＋ Nueva categoría…</option></select></td>
     <td><select data-f="type"><option value="out"${m.type==='out'?' selected':''}>Gasto</option><option value="in"${m.type==='in'?' selected':''}>Ingreso</option></select></td>
-    <td><select data-f="cur"><option value="VES"${m.cur==='VES'?' selected':''}>Bs</option><option value="USD"${m.cur==='USD'?' selected':''}>$</option></select></td>
+    <td><select data-f="cur"><option value="VES"${m.cur==='VES'?' selected':''}>Bs</option><option value="USD"${m.cur==='USD'?' selected':''}>$</option><option value="EUR"${m.cur==='EUR'?' selected':''}>€</option></select></td>
     <td><input type="number" class="num" data-f="amount" step="0.01" min="0" inputmode="decimal" value="${m.amount||''}" placeholder="0,00"></td>
     <td><input type="number" class="num" data-f="rate" step="0.01" min="0" inputmode="decimal" value="${m.rate||''}" placeholder="—"></td>
     <td class="ro num eq c-usd"></td><td class="ro num eq c-bs"></td><td class="ro num c-saldo"></td>
@@ -368,7 +382,7 @@ function refreshDerived(){
 function newRow(){
   const cur=monthKey();
   const d=(SH.month==='all'||SH.month===cur) ? today() : SH.month+'-01';
-  const m={id:uid(),type:'out',amount:0,cur:'VES',rate:S.rate||0,desc:'',cat:'Otros',date:d};
+  const m={id:uid(),type:'out',amount:0,cur:'VES',rate:S.rate||0,eurRate:S.eurRate||0,desc:'',cat:'Otros',date:d};
   S.movs.push(m); save();
   SH.q=''; SH.type='all';
   if($('sh-q')) $('sh-q').value=''; if($('sh-type')) $('sh-type').value='all';
@@ -379,10 +393,12 @@ function newRow(){
 function editCell(id,t){
   const m=S.movs.find(x=>x.id===id); if(!m) return;
   const f=t.dataset.f; let v=t.value;
+  if(f==='cat' && v==='__newcat'){ const name=prompt('Nombre de la categoría propia:'); if(!name||!name.trim()){ t.value=m.cat; return; } v=name.trim(); if(!S.customCats.includes(v)&&!CATS.includes(v)) S.customCats.push(v); m.cat=v; save(); sheetBodyRender(); return; }
   if(f==='amount'||f==='rate'){ v=parseFloat(v); if(!(v>=0)) v=0; }
   if(f==='date' && !v){ t.value=m.date; return; }
   m[f]=v;
   if(f==='cur' && !(m.rate>0)){ m.rate=S.rate||0; const r=t.closest('tr').querySelector('[data-f="rate"]'); if(r) r.value=m.rate||''; }
+  if(f==='cur' && v==='EUR' && !(m.eurRate>0)) m.eurRate=S.eurRate||0;
   save();
   if(f==='date') sheetBodyRender(); else refreshDerived();
 }
@@ -400,7 +416,7 @@ function vSum(){
     <div class="kpi"><small>Presupuesto total</small><b id="k-bud">$ 0,00</b></div>
   </div>
   <div class="card scroll"><table class="grid plain" id="sumtable"><thead><tr><th>Categoría</th><th class="num">Presupuesto $</th><th class="num">Gastado $</th><th class="num">Disponible $</th><th style="min-width:130px">Avance</th></tr></thead><tbody>`;
-  const cats=[...CATS]; Object.keys(st.byCat).forEach(c=>{ if(!cats.includes(c)) cats.push(c); });
+  const cats=allCats(); Object.keys(st.byCat).forEach(c=>{ if(!cats.includes(c)) cats.push(c); });
   cats.forEach(c=>{
     h+=`<tr data-cat="${esc(c)}"><td>${esc(c)}</td>
       <td class="num"><input type="number" data-budget="${esc(c)}" min="0" step="0.01" inputmode="decimal" value="${S.budgets[c]||''}" placeholder="0,00"></td>
@@ -487,9 +503,12 @@ function vSet(){
   return `<h1>Ajustes</h1><p class="sub">Tasa, moneda y respaldo de tus datos.</p>
   <div class="grid2"><div class="card">
     <label>Tasa oficial BCV (Bs por 1 USD)</label>
-    <div class="row" style="align-items:stretch"><input id="rate" type="number" inputmode="decimal" step="0.0001" min="0" value="${S.rate||''}" placeholder="Esperando tasa BCV"><button type="button" class="sec" id="bcv-refresh">Actualizar BCV</button></div>
-    <p id="bcv-status" class="muted" style="font-size:13px">Consulta de tasa oficial de referencia. Si no hay conexión, puedes introducirla manualmente.</p>
-    <div class="row" style="margin-top:8px"><span class="tag" id="bcv-source">Tasa manual / pendiente</span><span class="muted" id="bcv-date"></span></div>
+    <input id="rate" type="number" inputmode="decimal" step="0.0001" min="0" value="${S.rate||''}" placeholder="Esperando tasa BCV">
+    <label>Tasa oficial BCV (Bs por 1 EUR)</label>
+    <input id="eur-rate" type="number" inputmode="decimal" step="0.0001" min="0" value="${S.eurRate||''}" placeholder="Esperando tasa Euro BCV">
+    <div class="row" style="align-items:stretch;margin-top:10px"><button type="button" class="sec" id="bcv-refresh">Actualizar dólar y euro BCV</button></div>
+    <p id="bcv-status" class="muted" style="font-size:13px">Actualización automática al abrir y cada 6 horas. También puedes actualizar ahora.</p>
+    <div class="row" style="margin-top:8px"><span class="tag" id="bcv-source">Fuente: BCV vía DolarApi</span><span class="muted" id="bcv-date">USD ${S.rateUpdatedAt||'—'} · EUR ${S.eurUpdatedAt||'—'}</span></div>
     <label>Ver los totales del Panel en</label>
     <div class="seg"><button data-g="view" data-v="USD" class="${S.view==='USD'?'on':''}">Dólares $</button><button data-g="view" data-v="VES" class="${S.view==='VES'?'on':''}">Bolívares Bs</button></div>
     <div style="margin-top:14px"><button data-act="savset">Guardar tasa</button></div>
@@ -507,27 +526,41 @@ function vSet(){
   </div></div><p class="muted" style="text-align:center;font-size:13px">Mis Finanzas Pro · Datos guardados localmente en este dispositivo</p>`;
 }
 async function fetchBCVRate(){
-  const status=$('bcv-status'), input=$('rate'), source=$('bcv-source'), date=$('bcv-date'), btn=$('bcv-refresh');
-  if(!status||!input) return;
-  status.textContent='Consultando tasa oficial BCV…'; if(btn) btn.disabled=true;
-  try{
-    const res=await fetch('https://ve.dolarapi.com/v1/dolares/oficial',{cache:'no-store'});
+  const status=$('bcv-status'), input=$('rate'), eurInput=$('eur-rate'), source=$('bcv-source'), date=$('bcv-date'), btn=$('bcv-refresh');
+  if(btn) btn.disabled=true;
+  if(status) status.textContent='Consultando dólar y euro oficial BCV…';
+  const readRate=async url=>{
+    const res=await fetch(url,{cache:'no-store'});
     if(!res.ok) throw new Error('HTTP '+res.status);
     const data=await res.json();
-    const rate=Number(data.promedio ?? data.valor ?? data.price ?? data.rate);
+    const rate=Number(data.promedio ?? data.venta ?? data.valor ?? data.price ?? data.rate);
     if(!(rate>0)) throw new Error('Tasa inválida');
-    input.value=rate;
-    status.textContent='Tasa recibida. Pulsa “Guardar tasa” para aplicarla.';
-    if(source) source.textContent='Referencia: BCV';
-    if(date) date.textContent=data.fechaActualizacion ? 'Actualizada: '+data.fechaActualizacion : '';
+    return {rate,date:data.fechaActualizacion||data.fecha||data.updated_at||''};
+  };
+  try{
+    const [usd,eur]=await Promise.all([
+      readRate('https://ve.dolarapi.com/v1/dolares/oficial'),
+      readRate('https://ve.dolarapi.com/v1/euros/oficial')
+    ]);
+    S.rate=usd.rate; S.eurRate=eur.rate;
+    S.rateUpdatedAt=usd.date||today(); S.eurUpdatedAt=eur.date||today();
+    if(input) input.value=usd.rate;
+    if(eurInput) eurInput.value=eur.rate;
+    save();
+    if(status) status.textContent='Dólar y euro BCV actualizados automáticamente.';
+    if(source) source.textContent='Fuente: BCV vía DolarApi';
+    if(date) date.textContent='USD '+S.rateUpdatedAt+' · EUR '+S.eurUpdatedAt;
+    if(tab!=='set') render();
   }catch(err){
-    status.textContent='No se pudo consultar automáticamente. Comprueba internet o introduce la tasa manualmente; tu tasa guardada no cambió.';
-    if(source) source.textContent='Consulta no disponible';
+    if(status) status.textContent='No se pudo actualizar una o ambas tasas. Se conserva la última tasa guardada; revisa internet e intenta de nuevo.';
+    if(source) source.textContent='Última tasa guardada / consulta fallida';
+    if(date) date.textContent='USD '+(S.rateUpdatedAt||'sin fecha')+' · EUR '+(S.eurUpdatedAt||'sin fecha');
   }finally{if(btn) btn.disabled=false;}
 }
 function saveSettings(){
-  const r=parseFloat($('rate').value);
-  S.rate = r>0 ? r : 0;
+  const r=parseFloat($('rate').value), er=parseFloat($('eur-rate').value);
+  S.rate = r>0 ? r : S.rate;
+  S.eurRate = er>0 ? er : S.eurRate;
   if(S.rate>0){
     const t=today(), last=S.rates[S.rates.length-1];
     if(last && last.date===t) last.rate=S.rate;
@@ -549,7 +582,7 @@ function buildCSV(){
   const sal=runningBalances();
   [...S.movs].sort(cmpAsc).forEach(m=>{
     const bs=bsOf(m);
-    rows.push([m.date,m.desc,m.cat,m.type==='in'?'Ingreso':'Gasto',m.cur==='USD'?'USD':'Bs',dec(m.amount),dec(m.rate||0),dec(sgn(m)*usdOf(m)),bs==null?'':dec(sgn(m)*bs),dec(sal[m.id])]);
+    rows.push([m.date,m.desc,m.cat,m.type==='in'?'Ingreso':'Gasto',m.cur==='USD'?'USD':m.cur==='EUR'?'EUR':'Bs',dec(m.amount),dec(m.rate||0),dec(sgn(m)*usdOf(m)),bs==null?'':dec(sgn(m)*bs),dec(sal[m.id])]);
   });
   return '﻿' + rows.map(r=>r.map((c,i)=>i>=5?'"'+c+'"':cell(c)).join(';')).join('\r\n');
 }
@@ -573,18 +606,28 @@ function formMov(){
   F.type='out'; F.cur='VES';
   sheet.innerHTML=`<h1>Nuevo movimiento</h1>${segHTML('type',[['out','Gasto'],['in','Ingreso']],'out')}
   <div class="two"><div><label>Monto</label><input id="m-amount" type="number" inputmode="decimal" step="0.01" min="0" placeholder="0,00"></div>
-  <div><label>Moneda</label>${segHTML('cur',[['VES','Bs'],['USD','$']],'VES')}</div></div>
+  <div><label>Moneda</label>${segHTML('cur',[['VES','Bs'],['USD','$'],['EUR','€']],'VES')}</div></div>
   <label>Descripción (opcional)</label><input id="m-desc" placeholder="Ej: mercado, pasaje, sueldo" maxlength="80">
-  <div class="two"><div><label>Categoría</label><select id="m-cat">${CATS.map(c=>`<option>${c}</option>`).join('')}</select></div>
+  <div class="two"><div><label>Categoría</label><select id="m-cat">${allCats().map(c=>`<option value="${esc(c)}">${esc(c)}</option>`).join('')}<option value="__custom">＋ Crear categoría propia…</option></select></div>
   <div><label>Fecha</label><input id="m-date" type="date" value="${today()}"></div></div>
-  <label>Tasa del día (Bs por $)</label><input id="m-rate" type="number" inputmode="decimal" step="0.01" min="0" value="${S.rate||''}" placeholder="Opcional">
+  <div id="m-custom-wrap" class="hidden"><label>Nombre de tu categoría</label><input id="m-custom-cat" maxlength="40" placeholder="Ej: Mascota, Gasolina, Gimnasio"></div>
+  <label>Tasa del día (Bs por $)</label><input id="m-rate" type="number" inputmode="decimal" step="0.0001" min="0" value="${S.rate||''}" placeholder="Automática / opcional">
+  <label>Tasa del día (Bs por €)</label><input id="m-eur-rate" type="number" inputmode="decimal" step="0.0001" min="0" value="${S.eurRate||''}" placeholder="Automática / opcional">
   ${actions('Guardar')}`;
+  $('m-cat').onchange=()=>{ $('m-custom-wrap').classList.toggle('hidden',$('m-cat').value!=='__custom'); if($('m-cat').value==='__custom') $('m-custom-cat').focus(); };
   $('f-save').onclick=()=>{
     const amount=parseFloat($('m-amount').value);
     if(!(amount>0)){ alert('Escribe un monto mayor a 0.'); return; }
-    const rate=parseFloat($('m-rate').value)||0;
+    const rate=parseFloat($('m-rate').value)||S.rate||0, eurRate=parseFloat($('m-eur-rate').value)||S.eurRate||0;
+    let cat=$('m-cat').value;
+    if(cat==='__custom'){
+      cat=$('m-custom-cat').value.trim();
+      if(!cat){ alert('Escribe el nombre de tu categoría propia.'); return; }
+      if(!S.customCats.includes(cat) && !CATS.includes(cat)) S.customCats.push(cat);
+    }
     if(F.cur==='VES' && !(rate>0) && !confirm('No hay tasa del día. ¿Guardar igual? (Podrás ponerla después en la Hoja.)')) return;
-    S.movs.push({id:uid(),type:F.type,amount,cur:F.cur,rate,desc:$('m-desc').value.trim(),cat:$('m-cat').value,date:$('m-date').value||today()});
+    if(F.cur==='EUR' && !(eurRate>0) && !confirm('No hay tasa Euro BCV. ¿Guardar igual?')) return;
+    S.movs.push({id:uid(),type:F.type,amount,cur:F.cur,rate,eurRate,desc:$('m-desc').value.trim(),cat,date:$('m-date').value||today()});
     save(); closeModal(); render();
   };
   modal.classList.add('open'); setTimeout(()=>$('m-amount').focus(),50);
@@ -688,6 +731,9 @@ $('imp').addEventListener('change',e=>{
 const _render=render;
 render=function(){ _render(); if(tab==='sum') refreshSummary(); };
 render();
+fetchBCVRate();
+setInterval(()=>{ if(document.visibilityState==='visible') fetchBCVRate(); },6*60*60*1000);
+document.addEventListener('visibilitychange',()=>{ if(document.visibilityState==='visible') fetchBCVRate(); });
 if('serviceWorker' in navigator){ navigator.serviceWorker.register('sw.js').catch(()=>{}); }
 </script>
 </body>
